@@ -8,23 +8,23 @@
     body { font-family: system-ui, sans-serif; margin: 0; padding: 20px; line-height: 1.5; }
     .container { max-width: 800px; margin: 0 auto; }
     h1 { margin-top: 0; }
-    
+
     /* Output display areas */
     #segments { padding: 1em; background: #f4f4f4; border: 1px solid #ccc; max-height: 400px; overflow-y: auto; margin-top:10px; }
     .segment { margin-bottom: 0.5em; padding: 4px; border-bottom: 1px dotted #eee; }
     .segment:last-child { border-bottom: none; }
     #result { background:#f8f8f8; padding:1em; border:1px solid #ccc; max-height:300px; overflow:auto; white-space:pre-wrap; border-radius: 4px; margin-top:10px;}
-    
+
     /* Status indicators */
     #progress { width: 100%; height: 20px; margin-top: 10px; display: none; }
     .status { padding: 8px; margin: 8px 0; background: #e9f5ff; border-radius: 4px; }
     #debug { background: #ffe; padding: 10px; border: 1px solid #ccc; max-height: 200px; overflow: auto; white-space: pre-wrap; font-family: monospace; font-size: 12px; margin-top: 20px; display: none; }
-    
+
     /* Status message types */
     .warning { background: #ffeeee; color: #990000; }
     .success { background: #effff0; color: #006600; }
     .info { background: #e9f5ff; color: #00529B; }
-    
+
     /* Controls and inputs */
     .controls { margin: 16px 0; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;}
     button { padding: 8px 16px; background: #2563eb; color: white; border: none; border-radius: 4px; cursor: pointer; }
@@ -36,7 +36,7 @@
 <body>
   <div class="container">
     <h1>NeMo parakeet Audio Transcription</h1>
-    
+
     <div class="controls">
       <input type="file" id="audioFile" accept="audio/*" />
       <select id="mode">
@@ -44,30 +44,26 @@
         <option value="ws">WebSocket (Full File Decode)</option>
       </select>
       <button id="transcribeButton" onclick="transcribe()">Transcribe</button>
+      <button id="exportButton" onclick="exportTranscription()" disabled>Export as TXT</button>
       <div>
         <input type="checkbox" id="enableDebug" onchange="toggleDebug()" /> <label for="enableDebug">Debug mode</label>
       </div>
     </div>
-    
+
     <progress id="progress" value="0" max="100"></progress>
     <div id="statusBox" class="status" style="display: none;"></div>
-
     <h3>Transcription Time: <span id="time">N/A</span></h3>
     <h3>Time to First Segment: <span id="timeToFirstSegment">N/A</span></h3>
-
     <h3>Final Transcription Text:</h3>
     <div id="result">No transcription yet.</div>
-
     <h3>Streaming Segments:</h3>
     <div id="segments">No segments received yet.</div>
-    
+
     <div id="debug"></div>
   </div>
-
   <script>
     // Constants
     const CLIENT_UPLOAD_CHUNK_SIZE = 1024 * 256; // 256KB chunk size for file uploads
-
     // DOM Elements - Reference to all important UI elements for easy access
     const debugBox = document.getElementById("debug");
     const resultBox = document.getElementById("result");
@@ -77,7 +73,8 @@
     const progressBar = document.getElementById("progress");
     const statusBox = document.getElementById("statusBox");
     const transcribeButton = document.getElementById("transcribeButton");
-    
+    const exportButton = document.getElementById("exportButton");
+
     // State variables - Track application state across function calls
     let currentWebSocket = null;       // Current active WebSocket connection
     let watchdogInterval = null;       // Interval for monitoring WebSocket health
@@ -101,7 +98,7 @@
       debugBox.style.display = debugEnabled ? "block" : "none";
       if (debugEnabled) logDebug("Debug mode enabled.");
     }
-    
+
     /**
      * Logs debug information to the debug console if enabled
      * @param {string} message - The message to log
@@ -121,7 +118,7 @@
         debugBox.scrollTop = debugBox.scrollHeight;
       }
     }
-    
+
     /**
      * Updates the status message display with appropriate styling
      * @param {string} message - The status message to display
@@ -130,7 +127,7 @@
     function updateStatus(message, type = "info") {
       statusBox.style.display = "block";
       statusBox.textContent = message;
-      statusBox.className = 'status'; 
+      statusBox.className = 'status';
       if (type) statusBox.classList.add(type);
       logDebug(`Status Update (${type}): ${message}`);
     }
@@ -151,9 +148,50 @@
         progressBar.value = 0;
         statusBox.style.display = "none";
         transcribeButton.disabled = false;
+        exportButton.disabled = true;
         firstSegmentReceived = false;
     }
-    
+
+    /**
+     * Exports the final transcription text as a .txt file
+     * Uses the same name as the input audio file (e.g., MGMT1001_W03_L01.mp3 → MGMT1001_W03_L01.txt)
+     */
+    function exportTranscription() {
+        const transcriptionText = resultBox.textContent;
+        if (!transcriptionText || transcriptionText === "No transcription yet.") {
+            updateStatus("No transcription available to export.", "warning");
+            return;
+        }
+
+        // Get the input file element
+        const fileInput = document.getElementById("audioFile");
+        if (!fileInput.files.length) {
+            updateStatus("No input file found.", "warning");
+            return;
+        }
+
+        // Get the input file name and replace the extension with .txt
+        const inputFileName = fileInput.files[0].name;
+        const txtFileName = inputFileName.replace(/\.[^/.]+$/, "_transcript.txt");
+
+        // Create a Blob with the transcription text
+        const blob = new Blob([transcriptionText], { type: "text/plain" });
+        const url = URL.createObjectURL(blob);
+
+        // Create a temporary anchor element to trigger the download
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = txtFileName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+
+        // Clean up the URL object
+        URL.revokeObjectURL(url);
+
+        updateStatus(`Transcription exported as ${txtFileName}`, "success");
+    }
+
     /**
      * Main transcription function triggered by the Transcribe button
      * Handles file selection and routes to appropriate processing method based on selected mode
@@ -162,20 +200,17 @@
       resetUI();
       const fileInput = document.getElementById("audioFile");
       const mode = document.getElementById("mode").value;
-
       // Validate file selection
       if (!fileInput.files.length) {
         updateStatus("Please select an audio file.", "warning");
         return;
       }
-
       const file = fileInput.files[0];
       logDebug(`File selected: ${file.name}, size: ${(file.size / (1024 * 1024)).toFixed(2)}MB, type: ${file.type}`);
       transcribeButton.disabled = true;
-      
+
       // Record start time for performance measurement
       transcriptionStartTime = performance.now();
-
       // Route to appropriate processing method based on mode
       if (mode === "rest") {
         await processWithREST(file);
@@ -183,7 +218,7 @@
         await processWithWebSocket(file);
       }
     }
-    
+
     /**
      * Process audio file using REST API (synchronous processing)
      * Uploads the entire file and waits for complete transcription
@@ -192,47 +227,46 @@
     async function processWithREST(file) {
       const formData = new FormData();
       formData.append("file", file);
-      
+
       // Set up progress display
       progressBar.style.display = "block";
-      progressBar.value = 0; 
+      progressBar.value = 0;
       updateStatus("Uploading and processing file (REST)...", "info");
-      
+
       // Simulate progress since we don't have real progress events from fetch
       let progressVal = 0;
       const pseudoProgress = setInterval(() => {
         progressVal = Math.min(95, progressVal + 5);
         progressBar.value = progressVal;
       }, 200);
-
       try {
         // Send file to server
         const res = await fetch(`${getBaseUrl()}/v1/audio/transcriptions`, {
-          method: "POST", 
+          method: "POST",
           body: formData
         });
-        
+
         clearInterval(pseudoProgress);
         progressBar.value = 100;
-        
+
         // Calculate total processing time
         const processingEndTime = performance.now();
         const totalDurationSeconds = ((processingEndTime - transcriptionStartTime) / 1000).toFixed(2);
-        
+
         // Handle server errors
         if (!res.ok) {
             const errorData = await res.json().catch(() => ({ detail: "Unknown server error" }));
             throw new Error(`Server error: ${res.status} - ${errorData.detail || res.statusText}`);
         }
-        
+
         // Process and display results
         const json = await res.json();
-        timeBox.textContent = `${json.transcription_time || totalDurationSeconds} seconds`; 
-        timeToFirstSegmentBox.textContent = `${json.transcription_time || totalDurationSeconds} seconds`; 
-
+        timeBox.textContent = `${json.transcription_time || totalDurationSeconds} seconds`;
+        timeToFirstSegmentBox.textContent = `${json.transcription_time || totalDurationSeconds} seconds`;
         resultBox.textContent = json.text || "No transcription text returned.";
-        segmentsBox.innerHTML = ""; 
-        
+        segmentsBox.innerHTML = "";
+        exportButton.disabled = false;
+
         // Display individual segments if available
         if (json.segments && json.segments.length) {
           json.segments.forEach(seg => {
@@ -249,13 +283,13 @@
         console.error("REST Error:", err);
         resultBox.textContent = "Error: " + err.message;
         updateStatus("REST Error: " + err.message, "warning");
-        clearInterval(pseudoProgress); 
+        clearInterval(pseudoProgress);
       } finally {
         progressBar.style.display = "none";
         transcribeButton.disabled = false;
       }
     }
-    
+
     /**
      * Process audio file using WebSocket (streaming processing)
      * Uploads file in chunks and receives real-time transcription results
@@ -265,77 +299,76 @@
       progressBar.style.display = "block";
       progressBar.value = 0;
       firstSegmentReceived = false;
-      
+
       let receivedSegmentsCount = 0;
       let lastMessageTime = Date.now();
       let uploadStreamCompleted = false;
-      segmentsBox.innerHTML = ""; 
+      segmentsBox.innerHTML = "";
       let audioSampleRate = 16000;  // Default sample rate if detection fails
       let audioChannels = 1;        // Default to mono if detection fails
-      
+
       // Try to detect audio properties for optimal transcription
       try {
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        const arrayBuffer = await file.arrayBuffer(); 
-        const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer.slice(0)); 
+        const arrayBuffer = await file.arrayBuffer();
+        const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
         audioSampleRate = audioBuffer.sampleRate;
         audioChannels = audioBuffer.numberOfChannels;
         logDebug(`Audio properties detected: Rate=${audioSampleRate}, Channels=${audioChannels}`);
-        await audioCtx.close(); 
+        await audioCtx.close();
       } catch (e) {
         logDebug(`Could not decode audio for properties: ${e.message}. Using defaults. File type: ${file.type}`, "warning");
         if (file.type === "audio/wav" || file.name.toLowerCase().endsWith(".wav")) {
-            logDebug("File is WAV. Server will handle resampling if needed based on its default (16kHz).");
+          logDebug("File is WAV. Server will handle resampling if needed based on its default (16kHz).");
         }
       }
-
       try {
         // Close any existing WebSocket connection
         if (currentWebSocket && currentWebSocket.readyState === WebSocket.OPEN) {
           currentWebSocket.close();
         }
-        
+
         // Use secure WebSocket when on HTTPS, regular otherwise
         const wsProtocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
         const wsUrl = `${wsProtocol}${window.location.host}/v1/audio/transcriptions/ws`;
         currentWebSocket = new WebSocket(wsUrl);
-        
-        const socket = currentWebSocket; 
-        
+
+        const socket = currentWebSocket;
+
         // Set up watchdog to detect stalled connections
         if (watchdogInterval) clearInterval(watchdogInterval);
         watchdogInterval = setInterval(() => {
-          if (uploadStreamCompleted && (Date.now() - lastMessageTime > 20000)) { 
+          if (uploadStreamCompleted && (Date.now() - lastMessageTime > 20000)) {
             updateStatus("No response from server for 20s. Processing might be slow or stalled.", "warning");
             logDebug("Watchdog: Potential stall detected.");
-            lastMessageTime = Date.now(); 
+            lastMessageTime = Date.now();
           }
-        }, 10000); 
+        }, 10000);
 
         // WebSocket event handlers
         socket.onopen = async () => {
           updateStatus("WebSocket connected (Full Decode). Sending configuration...", "info");
           logDebug("WebSocket (Full Decode) opened.");
-          
+
           // Send audio configuration
-          socket.send(JSON.stringify({ 
-            sample_rate: audioSampleRate, 
-            channels: audioChannels, 
-            format: "binary" 
+          socket.send(JSON.stringify({
+            sample_rate: audioSampleRate,
+            channels: audioChannels,
+            format: "binary"
           }));
           logDebug(`Sent config (Full Decode): SR=${audioSampleRate}, CH=${audioChannels}`);
-          
+
           try {
             // Upload file in chunks
-            await uploadFileInChunks(file, socket); 
+            await uploadFileInChunks(file, socket);
             logDebug("uploadFileInChunks (Full Decode) finished.");
-            
+
             // Send END signal to indicate completion of upload
             if (socket.readyState === WebSocket.OPEN) {
               updateStatus("File upload complete (Full Decode). Sending END signal...", "info");
               socket.send("END");
               uploadStreamCompleted = true;
-              lastMessageTime = Date.now(); 
+              lastMessageTime = Date.now();
               logDebug("END signal sent (Full Decode).");
             }
           } catch (uploadError) {
@@ -344,15 +377,14 @@
             if (socket.readyState === WebSocket.OPEN) socket.close();
           }
         };
-        
+
         // Handle incoming messages from server
         socket.onmessage = (event) => {
-          lastMessageTime = Date.now(); 
+          lastMessageTime = Date.now();
           let msg;
           try {
-            msg = JSON.parse(event.data); 
+            msg = JSON.parse(event.data);
             logDebug("WebSocket message received (Full Decode)", msg);
-
             // Handle server error messages
             if (msg.type === "error") {
               updateStatus(`Server error (Full Decode): ${msg.error}`, "warning");
@@ -360,37 +392,37 @@
               socket.close();
               return;
             }
-            
+
             // Handle final transcription result
             if (msg.type === "final_transcription") {
               // Total transcription time is from the server message
               timeBox.textContent = `${msg.transcription_time || 'N/A'} seconds`;
-              
+
               // Set time to first segment if not already set
-              if (!firstSegmentReceived && msg.total_segments > 0) { 
+              if (!firstSegmentReceived && msg.total_segments > 0) {
                 const fallbackTimeToFirst = ((performance.now() - transcriptionStartTime) / 1000).toFixed(2);
                 timeToFirstSegmentBox.textContent = `${fallbackTimeToFirst} seconds (final only)`;
               } else if (!firstSegmentReceived && msg.total_segments === 0) {
                 timeToFirstSegmentBox.textContent = "N/A (no segments)";
               }
-
               resultBox.textContent = msg.text || "No final transcription text.";
+              exportButton.disabled = false;
               progressBar.style.display = "none";
               const expectedSegments = msg.total_segments || 0;
-              
+
               // Check if we received all expected segments
               if (expectedSegments > receivedSegmentsCount) {
                 updateStatus(`Transcription complete (Full Decode)! Received ${receivedSegmentsCount}/${expectedSegments} segments. Final duration: ${msg.final_duration_processed_seconds}s.`, "warning");
               } else {
                 updateStatus(`Transcription complete (Full Decode)! ${receivedSegmentsCount} segments processed. Final duration: ${msg.final_duration_processed_seconds}s.`, "success");
               }
-              
+
               // Clean up resources
-              if (watchdogInterval) clearInterval(watchdogInterval); 
-              socket.close(); 
-            } else if (msg.text !== undefined && msg.start !== undefined) { 
+              if (watchdogInterval) clearInterval(watchdogInterval);
+              socket.close();
+            } else if (msg.text !== undefined && msg.start !== undefined) {
               // This is a segment message with transcription text
-              
+
               // Record time to first segment for UX measurement
               if (!firstSegmentReceived) {
                 const firstSegmentTime = performance.now();
@@ -398,22 +430,22 @@
                 timeToFirstSegmentBox.textContent = `${durationToFirstSegment} seconds`;
                 firstSegmentReceived = true;
               }
-              
+
               receivedSegmentsCount++;
               updateStatus(`Processing (Full Decode): Received segment ${receivedSegmentsCount}`, "info");
-              
+
               // Clear placeholder if this is first segment
               if (segmentsBox.innerHTML === "No segments received yet.") {
-                segmentsBox.innerHTML = ""; 
+                segmentsBox.innerHTML = "";
                 resultBox.textContent = "Transcribing... (receiving segments)";
               }
-              
+
               // Create and display segment element
               const el = document.createElement("div");
               el.className = "segment";
               el.textContent = `[${msg.start.toFixed(2)}s - ${msg.end.toFixed(2)}s] ${msg.text}`;
               segmentsBox.appendChild(el);
-              segmentsBox.scrollTop = segmentsBox.scrollHeight; 
+              segmentsBox.scrollTop = segmentsBox.scrollHeight;
             } else {
               logDebug("Received unhandled message structure (Full Decode)", msg);
             }
@@ -431,30 +463,30 @@
           if (watchdogInterval) clearInterval(watchdogInterval);
           transcribeButton.disabled = false;
         };
-        
+
         // Handle WebSocket close events
         socket.onclose = (event) => {
           logDebug("WebSocket closed (Full Decode)", {
-            code: event.code, 
-            reason: event.reason, 
+            code: event.code,
+            reason: event.reason,
             wasClean: event.wasClean
           });
-          
+
           // Detect and report potential incomplete transcription
           if (uploadStreamCompleted && !resultBox.textContent.includes("Transcription complete")) {
-             updateStatus(`Connection closed (Full Decode) (Code: ${event.code}). Transcription might be incomplete.`, 
-                          event.wasClean ? "info" : "warning");
+            updateStatus(`Connection closed (Full Decode) (Code: ${event.code}). Transcription might be incomplete.`,
+                        event.wasClean ? "info" : "warning");
           } else if (!uploadStreamCompleted && event.code !== 1000 ) {
-             updateStatus(`Connection closed prematurely (Full Decode) (Code: ${event.code}).`, "warning");
+            updateStatus(`Connection closed prematurely (Full Decode) (Code: ${event.code}).`, "warning");
           }
-          
+
           // Clean up resources
           progressBar.style.display = "none";
           if (watchdogInterval) clearInterval(watchdogInterval);
           transcribeButton.disabled = false;
           currentWebSocket = null;
         };
-        
+
       } catch (err) {
         // Handle any errors in WebSocket setup
         updateStatus(`Client-side WebSocket setup error (Full Decode): ${err.message}`, "warning");
@@ -464,7 +496,7 @@
         transcribeButton.disabled = false;
       }
     }
-    
+
     /**
      * Uploads a file in chunks to a WebSocket connection
      * Streams the file data and updates progress bar
@@ -472,92 +504,92 @@
      * @param {WebSocket} socket - The WebSocket connection to send data through
      */
     async function uploadFileInChunks(file, socket) {
-        const fileSize = file.size;
-        let offset = 0;
-        
-        updateStatus(`Starting upload (Full File Mode): ${(fileSize / (1024 * 1024)).toFixed(2)}MB total`, "info");
-        logDebug(`uploadFileInChunks (Full File Mode): Starting for ${file.name}, size ${fileSize}`);
-        
-        // Check browser support for streaming API
-        if (!file.stream) {
-            const errorMsg = "File streaming (file.stream()) is not supported. Cannot upload.";
-            logDebug(errorMsg, "error");
-            updateStatus(errorMsg, "warning");
-            throw new Error(errorMsg);
+      const fileSize = file.size;
+      let offset = 0;
+
+      updateStatus(`Starting upload (Full File Mode): ${(fileSize / (1024 * 1024)).toFixed(2)}MB total`, "info");
+      logDebug(`uploadFileInChunks (Full File Mode): Starting for ${file.name}, size ${fileSize}`);
+
+      // Check browser support for streaming API
+      if (!file.stream) {
+        const errorMsg = "File streaming (file.stream()) is not supported. Cannot upload.";
+        logDebug(errorMsg, "error");
+        updateStatus(errorMsg, "warning");
+        throw new Error(errorMsg);
+      }
+
+      const reader = file.stream().getReader();
+      let lastProgressUpdate = 0;
+
+      try {
+        // Read and send file in chunks
+        while (offset < fileSize) {
+          // Check if WebSocket is still open
+          if (socket.readyState !== WebSocket.OPEN) {
+            logDebug("WS closed during upload (Full File Mode).", "warning");
+            throw new Error("WS connection closed during upload (Full File Mode).");
+          }
+
+          const { done, value } = await reader.read();
+
+          if (done) {
+            logDebug("File stream read complete (Full File Mode).");
+            break;
+          }
+
+          if (value) {
+            // Send binary chunk directly through WebSocket
+            socket.send(value);
+            offset += value.byteLength;
+
+            // Update progress bar
+            const progress = Math.min(100, Math.round((offset / fileSize) * 100));
+            progressBar.value = progress;
+
+            // Only update status on significant progress to avoid UI spam
+            if (progress > lastProgressUpdate || progress === 100) {
+              updateStatus(`Uploading (Full File Mode): ${progress}%`, "info");
+              lastProgressUpdate = progress;
+            }
+
+            // Small delay to allow UI updates and prevent browser from freezing
+            await new Promise(resolve => setTimeout(resolve, 1));
+          } else if (!done) {
+            logDebug("Reader no value but not done (Full File Mode).", "warning");
+          }
         }
-        
-        const reader = file.stream().getReader();
-        let lastProgressUpdate = 0;
-        
-        try {
-            // Read and send file in chunks
-            while (offset < fileSize) {
-                // Check if WebSocket is still open
-                if (socket.readyState !== WebSocket.OPEN) {
-                    logDebug("WS closed during upload (Full File Mode).", "warning");
-                    throw new Error("WS connection closed during upload (Full File Mode).");
-                }
-                
-                const { done, value } = await reader.read();
-                
-                if (done) {
-                    logDebug("File stream read complete (Full File Mode).");
-                    break;
-                }
-                
-                if (value) {
-                    // Send binary chunk directly through WebSocket
-                    socket.send(value);
-                    offset += value.byteLength;
-                    
-                    // Update progress bar
-                    const progress = Math.min(100, Math.round((offset / fileSize) * 100));
-                    progressBar.value = progress;
-                    
-                    // Only update status on significant progress to avoid UI spam
-                    if (progress > lastProgressUpdate || progress === 100) {
-                        updateStatus(`Uploading (Full File Mode): ${progress}%`, "info");
-                        lastProgressUpdate = progress;
-                    }
-                    
-                    // Small delay to allow UI updates and prevent browser from freezing
-                    await new Promise(resolve => setTimeout(resolve, 1));
-                } else if (!done) {
-                    logDebug("Reader no value but not done (Full File Mode).", "warning");
-                }
-            }
-            
-            // Verify complete upload
-            if (offset < fileSize) {
-                logDebug(`Upload ended prematurely (Full File Mode): ${offset}/${fileSize} bytes.`, "warning");
-            } else {
-                logDebug("Full file content streamed for upload (Full File Mode).", "success");
-            }
-        } catch (error) {
-            logDebug(`Error during chunk upload (Full File Mode): ${error.message}`, error);
-            updateStatus(`Upload stream error (Full File Mode): ${error.message}`, "warning");
-            
-            // Clean up reader if error occurs
-            if (reader) {
-                await reader.releaseLock().catch(e => logDebug("Error releasing reader lock (Full File Mode)", e));
-            }
-            
-            throw error; 
-        } finally {
-            // Always release reader lock to prevent memory leaks
-            if (reader && typeof reader.releaseLock === 'function') { 
-                try {
-                    await reader.releaseLock();
-                    logDebug("File stream reader lock released (Full File Mode).");
-                } catch (e) {
-                    logDebug("Could not release reader lock (Full File Mode).", e);
-                }
-            }
+
+        // Verify complete upload
+        if (offset < fileSize) {
+          logDebug(`Upload ended prematurely (Full File Mode): ${offset}/${fileSize} bytes.`, "warning");
+        } else {
+          logDebug("Full file content streamed for upload (Full File Mode).", "success");
         }
+      } catch (error) {
+        logDebug(`Error during chunk upload (Full File Mode): ${error.message}`, error);
+        updateStatus(`Upload stream error (Full File Mode): ${error.message}`, "warning");
+
+        // Clean up reader if error occurs
+        if (reader) {
+          await reader.releaseLock().catch(e => logDebug("Error releasing reader lock (Full File Mode)", e));
+        }
+
+        throw error;
+      } finally {
+        // Always release reader lock to prevent memory leaks
+        if (reader && typeof reader.releaseLock === 'function') {
+          try {
+            await reader.releaseLock();
+            logDebug("File stream reader lock released (Full File Mode).");
+          } catch (e) {
+            logDebug("Could not release reader lock (Full File Mode).", e);
+          }
+        }
+      }
     }
-    
+
     // Initialize debug mode on page load
-    toggleDebug(); 
+    toggleDebug();
   </script>
 </body>
 </html>
