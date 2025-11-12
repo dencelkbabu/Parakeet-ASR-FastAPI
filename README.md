@@ -4,7 +4,7 @@ A high-performance Automatic Speech Recognition (ASR) server built with NVIDIA's
 
 ## 🚀 Features
 
-- **State-of-the-art ASR**: Powered by NVIDIA's parakeet-tdt-0.6b-v2 model
+- **State-of-the-art ASR**: Powered by NVIDIA's parakeet-tdt-0.6b-v3 model
 - **Multiple APIs**:
   - REST API for simple file uploads
   - WebSocket API for real-time streaming transcription
@@ -26,7 +26,7 @@ The easiest way to run Parakeet ASR is using Docker:
 
 ```bash
 # Clone the repository
-git clone https://github.com/pnivek/Parakeet-ASR-FastAPI.git
+git clone https://github.com/dencelkbabu/Parakeet-ASR-FastAPI.git
 cd parakeet-asr
 
 # Build the Docker image
@@ -36,14 +36,20 @@ docker build -t parakeet-asr .
 docker run --gpus all -p 8777:8777 parakeet-asr
 ```
 
-### Manual Installation (Mac/Linux)
+### Manual Installation (Mac/Linux/Windows)
 
 If you prefer to run without Docker:
 
 ```bash
 # Clone the repository
-git clone https://github.com/pnivek/Parakeet-ASR-FastAPI.git
+git clone https://github.com/dencelkbabu/Parakeet-ASR-FastAPI.git
 cd parakeet-asr
+
+# Create a virtual python environment, to avoid unwanted conflicts
+py -m venv .venv
+
+# Initiate the virtual python environment
+.\.venv\Scripts\activate
 
 # Install dependencies
 pip install -r app/requirements.txt
@@ -137,8 +143,14 @@ To set up a development environment:
 
 ```bash
 # Clone the repository
-git clone https://github.com/pnivek/Parakeet-ASR-FastAPI.git
+git clone https://github.com/dencelkbabu/Parakeet-ASR-FastAPI.git
 cd parakeet-asr
+
+# Create a separate development environment
+py -m venv .venv-dev
+
+# Initiate the development environment
+.\.venv-dev\Scripts\activate
 
 # Install dev dependencies
 pip install -r app/requirements.txt
@@ -161,6 +173,8 @@ Common issues:
 This project is licensed under the [MIT License](LICENSE).
 
 ## 🙏 Acknowledgements
+- This project is a fork of and based on the original:  [Parakeet-ASR-FastAPI](https://github.com/pnivek/Parakeet-ASR-FastAPI) by [Kevin](https://github.com/pnivek).  
+- Special thanks to the original author for their work.
 
 - [NVIDIA NeMo](https://github.com/NVIDIA/NeMo) for the Parakeet ASR model
 - [FastAPI](https://fastapi.tiangolo.com/) for the web framework
