@@ -77,7 +77,7 @@ async def get_index():
 asr_model = None 
 try:
     logger.info("Loading ASR model...")
-    asr_model = nemo_asr.models.ASRModel.from_pretrained(model_name="nvidia/parakeet-tdt-0.6b-v2")
+    asr_model = nemo_asr.models.ASRModel.from_pretrained(model_name="nvidia/parakeet-tdt-0.6b-v3")
     asr_model.preprocessor.featurizer.dither = 0.0  
     logger.info("ASR model loaded successfully.")
 except Exception as e:
