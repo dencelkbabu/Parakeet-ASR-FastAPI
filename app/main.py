@@ -7,6 +7,15 @@ import base64
 import asyncio
 import logging
 
+# --- BEGIN MONKEY-PATCH FOR WINDOWS ---
+import signal
+# NeMo's exp_manager (used by nemo.collections.asr) relies on signal.SIGKILL,
+# which does not exist on Windows. We patch the 'signal' module to map
+# SIGKILL to SIGTERM as a workaround to allow the import to succeed.
+if os.name == 'nt' and not hasattr(signal, 'SIGKILL'):
+    setattr(signal, 'SIGKILL', signal.SIGTERM)
+# --- END MONKEY-PATCH FOR WINDOWS ---
+
 from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.websockets import WebSocketState
 from fastapi.responses import JSONResponse, HTMLResponse
