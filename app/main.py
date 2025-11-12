@@ -75,7 +75,10 @@ app.mount("/static", StaticFiles(directory=static_dir), name="static")
 # Root endpoint to serve index.html
 @app.get("/", response_class=HTMLResponse)
 async def get_index():
-    index_path = os.path.join(static_dir, "index.html")
+    # Get the directory where main.py is running (the 'app' folder)
+    app_dir = os.path.dirname(__file__) 
+    # Look for index.html in that 'app' folder
+    index_path = os.path.join(app_dir, "index.html")
     if os.path.exists(index_path):
         return FileResponse(index_path)
     else:
