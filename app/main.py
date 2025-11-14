@@ -28,11 +28,9 @@ import nemo.collections.asr as nemo_asr
 # Load environment variables from .env file if it exists
 from dotenv import load_dotenv
 load_dotenv()
-
 # Suppress NeMo training/validation warnings
 warnings.filterwarnings("ignore", message="If you intend to do training or fine-tuning")
 warnings.filterwarnings("ignore", message="If you intend to do validation")
-
 # Configure logging
 log_level_str = os.getenv("LOG_LEVEL", "INFO").upper()
 log_level = getattr(logging, log_level_str, logging.INFO)
@@ -45,27 +43,42 @@ logger = logging.getLogger("parakeet-asr")
 # Reduce NeMo log verbosity
 logging.getLogger("nemo_logging").setLevel(logging.WARNING)
 logger.info(f"Logging configured with level: {log_level_str}")
-
+# Import cuda early to ensure detection
+try:
+    import cuda
+    logger.info("cuda-python is available.")
+except ImportError:
+    logger.warning("cuda-python is not available.")
+# Import torchcodec early to ensure detection
+try:
+    import torchcodec
+    logger.info("torchcodec is available.")
+except ImportError:
+    logger.warning("torchcodec is not available.")
 # Determine device (GPU priority, CPU fallback)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 logger.info(f"Using device: {device}")
-
 # Function to log GPU memory usage
 def log_gpu_memory():
     if torch.cuda.is_available():
         allocated = torch.cuda.memory_allocated(device) / 1024**2  # MB
         cached = torch.cuda.memory_reserved(device) / 1024**2     # MB
         logger.info(f"GPU Memory - Allocated: {allocated:.2f} MB, Cached: {cached:.2f} MB")
-
-# model configuration
+# Model configuration
+model_name = os.getenv("ASR_MODEL_NAME", "nvidia/parakeet-tdt-0.6b-v3")
 BATCH_SIZE = int(os.getenv("BATCH_SIZE", 1))
 NUM_WORKERS = int(os.getenv("NUM_WORKERS", 0))
 CHUNK_LENGTH = float(os.getenv("TRANSCRIBE_CHUNK_LEN", 30))
 OVERLAP = float(os.getenv("TRANSCRIBE_OVERLAP", 5))
 MODEL_SAMPLE_RATE = int(os.getenv("SAMPLE_RATE", 16000))
 PORT = int(os.getenv("PORT", 8777))
-logger.info(f"Model config: BATCH_SIZE: {BATCH_SIZE}, NUM_WORKERS: {NUM_WORKERS}, CHUNK_LENGTH: {CHUNK_LENGTH}, OVERLAP: {OVERLAP}, MODEL_SAMPLE_RATE: {MODEL_SAMPLE_RATE}")
-
+# Adjust batch size based on GPU memory
+if torch.cuda.is_available():
+    gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3  # GB
+    if gpu_memory < 8:  # Less than 8GB VRAM
+        BATCH_SIZE = 1
+        logger.warning(f"Low GPU memory ({gpu_memory:.2f}GB). Reducing batch size to {BATCH_SIZE}.")
+logger.info(f"Model config: BATCH_SIZE: {BATCH_SIZE}, NUM_WORKERS: {NUM_WORKERS}, CHUNK_LENGTH: {CHUNK_LENGTH}, OVERLAP: {OVERLAP}, MODEL_SAMPLE_RATE: {MODEL_SAMPLE_RATE}, MODEL_NAME: {model_name}")
 # FAST API app with CORS
 app = FastAPI()
 app.add_middleware(
@@ -75,7 +88,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 # Mount static files directory
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 if not os.path.exists(static_dir):
@@ -84,7 +96,6 @@ if not os.path.exists(static_dir):
         os.makedirs(static_dir, exist_ok=True)
         logger.info(f"Created static directory at {static_dir}")
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
-
 # Root endpoint to serve index.html
 @app.get("/", response_class=HTMLResponse)
 async def get_index():
@@ -95,39 +106,49 @@ async def get_index():
     else:
         logger.error(f"Index file not found at {index_path}")
         return HTMLResponse(content="<html><body><h1>Parakeet ASR Server</h1><p>UI not available. index.html not found.</p></body></html>")
-
 # Health check endpoint
 @app.get("/health")
 async def health_check():
+    model_details = {
+        "name": getattr(asr_model, "_name", "unknown") if asr_model else "not loaded",
+        "version": getattr(asr_model, "_version", "unknown") if asr_model else "not loaded",
+        "is_canary": "canary" in getattr(asr_model, "_name", "").lower() if asr_model else False,
+    }
     return {
         "status": "ok",
         "device": str(device),
         "gpu_available": torch.cuda.is_available(),
         "model_loaded": asr_model is not None,
-        "cuda_python_installed": "cuda_python" in globals() or "cuda_python" in locals()
+        "model_details": model_details,
+        "cuda_installed": "cuda" in globals() or "cuda" in locals(),
+        "torchcodec_installed": "torchcodec" in globals() or "torchcodec" in locals(),
     }
-
-# load model
+# Load model
 asr_model = None
 try:
-    logger.info("Loading ASR model...")
+    logger.info(f"Loading ASR model: {model_name}...")
     model_load_start = time.time()
-    asr_model = nemo_asr.models.ASRModel.from_pretrained(model_name="nvidia/parakeet-tdt-0.6b-v3")
+    asr_model = nemo_asr.models.ASRModel.from_pretrained(model_name=model_name)
     asr_model = asr_model.to(device)
     asr_model.preprocessor.featurizer.dither = 0.0
+
+    # Update sample rate if model config specifies it
+    if hasattr(asr_model, "_cfg") and hasattr(asr_model._cfg.preprocessor, "sample_rate"):
+        MODEL_SAMPLE_RATE = asr_model._cfg.preprocessor.sample_rate
+        logger.info(f"Using model sample rate: {MODEL_SAMPLE_RATE}")
     model_load_end = time.time()
     logger.info(f"ASR model loaded successfully in {model_load_end - model_load_start:.2f} seconds.")
+    logger.info(f"Model details: Name={getattr(asr_model, '_name', 'unknown')}, Version={getattr(asr_model, '_version', 'unknown')}")
     log_gpu_memory()
     # Check for CUDA graphs
     try:
-        import cuda_python
+        import cuda
         logger.info("CUDA graphs are enabled (cuda-python installed).")
     except ImportError:
         logger.warning("CUDA graphs are disabled (cuda-python not installed). Decoding speed will be slower.")
 except Exception as e:
     logger.critical(f"FATAL: Could not load ASR model. Error: {e}")
     asr_model = None
-
 def run_asr_on_tensor_chunk(
     audio_chunk_tensor: torch.Tensor,
     chunk_time_offset: float
@@ -163,7 +184,6 @@ def run_asr_on_tensor_chunk(
             num_workers=NUM_WORKERS
         )
         logger.debug(f"Processed ASR chunk in {time.time() - chunk_start_time:.2f} seconds")
-
         processed_segments = []
         chunk_text_list = []
         if not (output_hypotheses and isinstance(output_hypotheses, list) and len(output_hypotheses) == 1):
@@ -200,7 +220,6 @@ def run_asr_on_tensor_chunk(
         import traceback
         traceback.print_exc()
         return [], []
-
 @app.post("/v1/audio/transcriptions")
 async def transcribe_rest(file: UploadFile = File(...)):
     if not asr_model:
@@ -211,32 +230,33 @@ async def transcribe_rest(file: UploadFile = File(...)):
         with tempfile.NamedTemporaryFile(delete=False, suffix=".tmp") as tmp_full_audio:
             shutil.copyfileobj(file.file, tmp_full_audio)
             uploaded_full_temp_file_path = tmp_full_audio.name
-
         try:
-            waveform_full, sr_orig = torchaudio.load(uploaded_full_temp_file_path)
+            # Use torchcodec if available, otherwise fall back to torchaudio
+            if "torchcodec" in globals() or "torchcodec" in locals():
+                logger.info("Using torchaudio.load_with_torchcodec for REST")
+                waveform_full, sr_orig = torchaudio.load_with_torchcodec(uploaded_full_temp_file_path)
+            else:
+                logger.info("Using torchaudio.load for REST (torchcodec not found)")
+                waveform_full, sr_orig = torchaudio.load(uploaded_full_temp_file_path)
         except Exception as load_err:
             logger.error(f"transcribe_rest: Failed to load audio from {uploaded_full_temp_file_path}: {load_err}")
             raise
         if sr_orig != MODEL_SAMPLE_RATE:
             waveform_full = torchaudio.functional.resample(waveform_full, orig_freq=sr_orig, new_freq=MODEL_SAMPLE_RATE)
-
         if waveform_full.ndim > 1 and waveform_full.shape[0] > 1:
             waveform_full = waveform_full.mean(dim=0, keepdim=True)
         elif waveform_full.ndim == 1:
              waveform_full = waveform_full.unsqueeze(0)
-
         waveform_full = waveform_full.to(device)
         if waveform_full.shape[1] == 0:
             logger.info("transcribe_rest: Audio content is empty after loading and preprocessing.")
             return JSONResponse(content={"text": "", "segments": [], "language": "en", "transcription_time": 0.0})
         total_duration_seconds = waveform_full.shape[1] / MODEL_SAMPLE_RATE
-
         start_time_processing = time.time()
         current_processing_time_seconds = 0.0
         all_segments = []
         total_chunks = int((total_duration_seconds / (CHUNK_LENGTH - OVERLAP)) + 1)
         chunk_counter = 0
-
         while current_processing_time_seconds < total_duration_seconds:
             actual_chunk_start_seconds = max(0, current_processing_time_seconds - OVERLAP)
             actual_chunk_end_seconds = min(total_duration_seconds, current_processing_time_seconds + CHUNK_LENGTH)
@@ -244,13 +264,11 @@ async def transcribe_rest(file: UploadFile = File(...)):
             end_sample = int(actual_chunk_end_seconds * MODEL_SAMPLE_RATE)
             if start_sample >= end_sample:
                 break
-
             chunk_slice_2d = waveform_full[:, start_sample:end_sample]
             audio_chunk_for_asr = chunk_slice_2d.squeeze(0)
             if audio_chunk_for_asr.numel() == 0:
                 current_processing_time_seconds += (CHUNK_LENGTH - OVERLAP)
                 continue
-
             chunk_counter += 1
             logger.info(f"Processing chunk {chunk_counter}/{total_chunks} (start: {actual_chunk_start_seconds:.2f}s, end: {actual_chunk_end_seconds:.2f}s)")
             chunk_start_time = time.time()
@@ -260,7 +278,6 @@ async def transcribe_rest(file: UploadFile = File(...)):
                 actual_chunk_start_seconds
             )
             logger.info(f"Processed chunk {chunk_counter}/{total_chunks} in {time.time() - chunk_start_time:.2f} seconds")
-
             for seg_meta in segments_from_chunk:
                 if seg_meta["start"] >= current_processing_time_seconds or not all_segments:
                     all_segments.append({
@@ -276,7 +293,6 @@ async def transcribe_rest(file: UploadFile = File(...)):
                         "no_speech_prob": None
                     })
             current_processing_time_seconds += (CHUNK_LENGTH - OVERLAP)
-
         transcription_duration_seconds = round(time.time() - start_time_processing, 3)
         final_text = " ".join(s['text'] for s in all_segments).strip()
         logger.info(f"Transcription completed in {transcription_duration_seconds:.2f} seconds")
@@ -292,7 +308,6 @@ async def transcribe_rest(file: UploadFile = File(...)):
     finally:
         if uploaded_full_temp_file_path and os.path.exists(uploaded_full_temp_file_path):
             os.remove(uploaded_full_temp_file_path)
-
 @app.websocket("/v1/audio/transcriptions/ws")
 async def websocket_transcribe(websocket: WebSocket):
     await websocket.accept()
@@ -313,14 +328,12 @@ async def websocket_transcribe(websocket: WebSocket):
             logger.info("WebSocket (/ws): Client configuration timeout. Proceeding.")
         except Exception as e:
             logger.info(f"WebSocket (/ws): Error receiving client configuration: {e}. Proceeding.")
-
         logger.info("WebSocket (/ws): Waiting for audio data stream from client...")
         while is_connected:
             try:
                 if websocket.application_state != WebSocketState.CONNECTED:
                     is_connected = False
                     break
-
                 message = await asyncio.wait_for(websocket.receive(), timeout=60.0)
                 if "bytes" in message:
                     main_audio_buffer.extend(message["bytes"])
@@ -347,29 +360,31 @@ async def websocket_transcribe(websocket: WebSocket):
                 import traceback; traceback.print_exc()
                 is_connected = False
                 break
-
         if not main_audio_buffer:
             logger.info("WebSocket (/ws): No audio data received.")
             if websocket.application_state == WebSocketState.CONNECTED:
                 await websocket.send_json({"error": "No audio data received", "type": "error"})
             return
-
         logger.info("WebSocket (/ws): Starting full audio processing.")
         processing_start_time = time.time()
         all_segments_sent_to_client = []
         try:
             audio_io_buffer = io.BytesIO(main_audio_buffer)
-            full_waveform, sr_original = torchaudio.load(audio_io_buffer)
+            # Use torchcodec if available, otherwise fall back to torchaudio
+            if "torchcodec" in globals() or "torchcodec" in locals():
+                logger.info("Using torchaudio.load_with_torchcodec for WebSocket")
+                full_waveform, sr_original = torchaudio.load_with_torchcodec(audio_io_buffer)
+            else:
+                logger.info("Using torchaudio.load for WebSocket (torchcodec not found)")
+                full_waveform, sr_original = torchaudio.load(audio_io_buffer)
             main_audio_buffer.clear()
             logger.info(f"WebSocket (/ws): Audio decoded. Original SR={sr_original}, Shape={full_waveform.shape}")
             if sr_original != MODEL_SAMPLE_RATE:
                 full_waveform = torchaudio.functional.resample(full_waveform, orig_freq=sr_original, new_freq=MODEL_SAMPLE_RATE)
-
             if full_waveform.ndim > 1 and full_waveform.shape[0] > 1:
                 full_waveform = full_waveform.mean(dim=0)
             elif full_waveform.ndim == 2 and full_waveform.shape[0] == 1:
                 full_waveform = full_waveform.squeeze(0)
-
             full_waveform = full_waveform.to(device)
             if full_waveform.numel() == 0:
                 logger.info("WebSocket (/ws): Audio content is empty after decoding/preprocessing.")
@@ -384,25 +399,21 @@ async def websocket_transcribe(websocket: WebSocket):
             current_processing_window_start_seconds = 0.0
             total_chunks = int((total_audio_duration_seconds / (CHUNK_LENGTH - OVERLAP)) + 1)
             chunk_counter = 0
-
             logger.info(f"WebSocket (/ws): Server-side chunking. Total Duration: {total_audio_duration_seconds:.2f}s. ChunkLen: {CHUNK_LENGTH}s, Overlap: {OVERLAP}s")
             while current_processing_window_start_seconds < total_audio_duration_seconds:
                 if websocket.application_state != WebSocketState.CONNECTED:
                     logger.info("WebSocket (/ws): Client disconnected during chunk processing.")
                     break
-
                 actual_asr_chunk_start_seconds = max(0, current_processing_window_start_seconds - OVERLAP)
                 actual_asr_chunk_end_seconds = min(total_audio_duration_seconds, current_processing_window_start_seconds + CHUNK_LENGTH)
                 start_sample_idx = int(actual_asr_chunk_start_seconds * MODEL_SAMPLE_RATE)
                 end_sample_idx = int(actual_asr_chunk_end_seconds * MODEL_SAMPLE_RATE)
                 if start_sample_idx >= end_sample_idx:
                     break
-
                 audio_chunk_for_asr = full_waveform[start_sample_idx:end_sample_idx]
                 if audio_chunk_for_asr.numel() == 0:
                     current_processing_window_start_seconds += (CHUNK_LENGTH - OVERLAP)
                     continue
-
                 chunk_counter += 1
                 logger.info(f"WebSocket (/ws): Processing chunk {chunk_counter}/{total_chunks} (start: {actual_asr_chunk_start_seconds:.2f}s, end: {actual_asr_chunk_end_seconds:.2f}s)")
                 chunk_start_time = time.time()
@@ -412,7 +423,6 @@ async def websocket_transcribe(websocket: WebSocket):
                     actual_asr_chunk_start_seconds
                 )
                 logger.info(f"WebSocket (/ws): Processed chunk {chunk_counter}/{total_chunks} in {time.time() - chunk_start_time:.2f} seconds")
-
                 if websocket.application_state == WebSocketState.CONNECTED:
                     for segment_data in segments_from_chunk:
                         if segment_data["start"] >= current_processing_window_start_seconds or not all_segments_sent_to_client:
@@ -422,9 +432,7 @@ async def websocket_transcribe(websocket: WebSocket):
                 else:
                     logger.info("WebSocket (/ws): Client disconnected while sending segments.")
                     break
-
                 current_processing_window_start_seconds += (CHUNK_LENGTH - OVERLAP)
-
             if websocket.application_state == WebSocketState.CONNECTED:
                 final_transcription_text = " ".join(s['text'] for s in all_segments_sent_to_client).strip()
                 transcription_duration = round(time.time() - processing_start_time, 3)
@@ -450,7 +458,6 @@ async def websocket_transcribe(websocket: WebSocket):
         if websocket.application_state == WebSocketState.CONNECTED:
             await websocket.close()
         logger.info("WebSocket (/ws) handler finished.")
-
 if __name__ == "__main__":
     import uvicorn
     if not asr_model:
