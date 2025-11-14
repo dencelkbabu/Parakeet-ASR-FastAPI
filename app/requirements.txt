@@ -1,10 +1,23 @@
+# --- PyTorch Installation (Run this command manually first) ---
+# This ensures you get the correct build for your CUDA version.
+# pip install torch==2.9.1+cu130 torchaudio==2.9.1+cu130 --index-url https://download.pytorch.org/whl/cu130
+
+# --- Core Dependencies ---
 numpy==1.26.4
 fastapi==0.115.12
 websockets==15.0.1
 uvicorn==0.34.2
-nemo_toolkit[asr]==2.2.1
-cuda-python==12.8
-torch==2.7.0
-torchaudio==2.7.0
 python-multipart==0.0.20
 python-dotenv==1.1.0
+
+# --- NVIDIA & ASR Dependencies ---
+
+# NeMo Toolkit (requires NVIDIA's index)
+# Install manually: pip install nemo-toolkit[asr]==2.5.3 --extra-index-url https://pypi.ngc.nvidia.com
+nemo-toolkit[asr]==2.5.3
+
+# TorchCodec for faster audio loading
+torchcodec==0.8.1
+
+# CUDA-Python for CUDA Graphs
+cuda-python==12.9.4
